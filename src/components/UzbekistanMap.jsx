@@ -1,4 +1,3 @@
-// ...imports
 import React, { useEffect, useState, useRef } from 'react';
 
 const UzbekistanMap = () => {
@@ -50,6 +49,22 @@ const UzbekistanMap = () => {
       fetchViloyatlar();
     }
   }, [ymaps, map]);
+
+  useEffect(() => {
+    if (!map) return;
+
+    const handleResize = () => map.container.fitToViewport();
+    window.addEventListener('resize', handleResize);
+    handleResize();
+
+    return () => window.removeEventListener('resize', handleResize);
+  }, [map]);
+
+  useEffect(() => {
+    if (map) {
+      setTimeout(() => map.container.fitToViewport(), 100);
+    }
+  }, [activeMahallaId]);
 
   const fetchViloyatlar = async () => {
     setLoading(true);
@@ -115,16 +130,76 @@ const UzbekistanMap = () => {
     setMahallalar([]);
     setEditableNarxlar({});
     mahallaLayer.current?.removeAll();
+    tumanLayer.current?.removeAll();
+  
+    const viloyat = viloyatlar.find(v => v.id === id);
+    if (viloyat && viloyat.polygon && map && viloyatLayer.current) {
+      const coords = parsePolygonGeometry(viloyat.polygon);
+      viloyatLayer.current.removeAll();
+  
+      const polygon = new ymaps.Polygon([coords], { hintContent: viloyat.name }, {
+        fillColor: '#a1c4fd',
+        fillOpacity: 0.5,
+        strokeWidth: 2
+      });
+  
+      viloyatLayer.current.add(polygon);
+  
+      const bounds = polygon.geometry.getBounds();
+      if (bounds) {
+        map.setBounds(bounds, {
+          checkZoomRange: true,
+          duration: 1000, // 1 sekundlik silliq animatsiya
+        });
+      }
+    }
+  
     await fetchTumanlar(id);
   };
+  
+  
 
-  const handleTumanSelect = async (id) => {
-    setSelectedTuman(id);
-    setMahallalar([]);
-    setEditableNarxlar({});
-    viloyatLayer.current?.removeAll();
-    await fetchMahallalar(id);
-  };
+const handleTumanSelect = async (id) => {
+  setSelectedTuman(id);
+  setActiveMahallaId(null);
+  setMahallalar([]);
+  setEditableNarxlar({});
+
+  viloyatLayer.current?.removeAll();
+  tumanLayer.current?.removeAll();
+  mahallaLayer.current?.removeAll();
+
+  await fetchMahallalar(id);
+
+  const tuman = tumanlar.find(t => t.id === id);
+  if (tuman && tuman.geometry && map && tumanLayer.current) {
+    const coords = parsePolygonGeometry(tuman.geometry);
+
+    // 1️⃣ YANGI POLYGON YARATISH
+    const polygon = new ymaps.Polygon([coords], { hintContent: tuman.properties?.name }, {
+      fillColor: '#76b852',
+      fillOpacity: 0.4,
+      strokeWidth: 2
+    });
+
+    // 2️⃣ XARITAGA QO‘SHISH — shundan keyin bounds ishlaydi
+    tumanLayer.current.add(polygon);
+
+    // 3️⃣ KEYIN ZOOM QILISH
+    setTimeout(() => {
+      const bounds = polygon.geometry.getBounds();
+      if (bounds) {
+        map.setBounds(bounds, {
+          checkZoomRange: true,
+          duration: 1000
+        });
+      }
+    }, 100); // biroz kechiktirib ishlatish — bu muammoni butunlay bartaraf etadi
+  }
+};
+
+  
+  
 
   const parsePolygonGeometry = (str) => {
     if (!str) return [];
@@ -138,7 +213,7 @@ const UzbekistanMap = () => {
     } catch {
       return [];
     }
-};
+  };
 
   const renderViloyatlar = () => {
     if (!map || !viloyatLayer.current) return;
@@ -158,10 +233,6 @@ const UzbekistanMap = () => {
     if (!map || !tumanLayer.current) return;
     tumanLayer.current.removeAll();
     tumanlar.forEach(t => {
-      if (!t.geometry) {
-        console.warn("Tuman geometry yo'q:", t.properties?.name);
-        return;
-      }
       if (!t.geometry) return;
       const coords = parsePolygonGeometry(t.geometry);
       const polygon = new ymaps.Polygon([coords], { hintContent: t.properties?.name }, {
@@ -195,40 +266,59 @@ const UzbekistanMap = () => {
 
   useEffect(() => renderViloyatlar(), [map, viloyatlar]);
   useEffect(() => renderTumanlar(), [map, tumanlar]);
+
   useEffect(() => {
     mahallaLayer.current?.removeAll();
     if (!map || !mahallalar.length) return;
+  
+    // 🧹 Mahalla bosilayotganda tumanLayer butunlay xaritadan olib tashlanadi
+    if (map.geoObjects && tumanLayer.current) {
+      map.geoObjects.remove(tumanLayer.current);
+    }
+  
     mahallalar.forEach(m => {
-      if (!m.geometry) {
-        console.warn("Mahalla geometry yo'q:", m.properties?.name);
-        return;
-      }
+      if (!m.geometry) return;
+  
       const coords = parsePolygonGeometry(m.geometry);
-      if (!coords.length) {
-        console.warn("Mahalla noto‘g‘ri koordinata:", m.properties?.name);
-        return;
-      }
+      if (!coords.length) return;
+  
       const polygon = new ymaps.Polygon([coords], { hintContent: m.properties?.name }, {
         fillColor: '#fa709a',
         fillOpacity: 0.5,
-        strokeWidth: 2
+        strokeWidth: 2,
       });
+  
       polygon.options.set('cursor', 'pointer');
       polygon.options.set('interactivityModel', 'default');
+  
       polygon.events.add('click', () => {
         setActiveMahallaId(m.id);
+  
+        // 🧼 Mahalla layerni ustiga chiqarish
+        map.geoObjects.remove(mahallaLayer.current);
+        map.geoObjects.add(mahallaLayer.current);
+  
+        // 🔍 Zoom qilish
         const bounds = polygon.geometry.getBounds();
-        if (bounds) map.setBounds(bounds, { checkZoomRange: true });
+        if (bounds) {
+          map.setBounds(bounds, {
+            checkZoomRange: true,
+            duration: 1000, // 1 sekundlik silliq zoom
+          });
+        }
       });
+  
       mahallaLayer.current.add(polygon);
     });
   }, [map, mahallalar]);
+  
+  
 
   return (
     <div className="flex flex-col h-screen">
       <header className="text-2xl font-bold text-center py-4 bg-blue-100">O'zbekiston xaritasi</header>
-      <div className="flex flex-1">
-        <aside className="w-[250px] overflow-y-auto bg-white border-r">
+      <main className="flex flex-1  gap-4 overflow-hidden">
+        <aside className="w-[20%] h-full overflow-y-auto bg-white ">
           <div className="p-4 space-y-2">
             {selectedTuman && (
               <button
@@ -244,7 +334,7 @@ const UzbekistanMap = () => {
                 }}
                 className="text-sm text-blue-600 hover:underline mb-2"
               >
-                ⬅ Viloyatlarga qaytish
+                ⬅️ Viloyatlarga qaytish
               </button>
             )}
             {selectedViloyat && !selectedTuman && (
@@ -263,21 +353,36 @@ const UzbekistanMap = () => {
                 }}
                 className="text-sm text-blue-600 hover:underline mb-2"
               >
-                ⬅ Respublikaga qaytish
+                ⬅️ Respublikaga qaytish
               </button>
             )}
-            {viloyatlar.map(v => (
-              <div key={v.id} onClick={() => handleViloyatSelect(v.id)}>{v.name}</div>
-            ))}
+            {viloyatlar.map(v => {
+              const isActive = selectedViloyat === v.id;
+
+              return (
+                <div
+                  key={v.id}
+                  onClick={() => handleViloyatSelect(v.id)}
+                  className={`cursor-pointer px-2 py-1 rounded ${isActive
+                      ? 'bg-gradient-to-r from-[#0AA3A1] to-[#B4C29E] text-white'
+                      : 'hover:bg-gray-100'
+                    }`}
+                >
+                  {v.name}
+                </div>
+              );
+            })}
+
             {selectedViloyat && tumanlar.map(t => (
               <div key={t.id} onClick={() => handleTumanSelect(t.id)} className="ml-4">{t.properties?.name}</div>
             ))}
           </div>
         </aside>
-        <main className="flex-1 w-[80%]">
-          <div ref={mapRef} className="w-full h-full" />
+
+        <section className="flex-1 relative  rounded-2xl p-4   ">
+          <div ref={mapRef} className="flex-1 min-h-[600px] h-full w-full rounded-2xl  overflow-hidden" />
           {activeMahallaId && (
-            <aside className="absolute right-0 top-0 w-[400px] h-full bg-white shadow-lg p-4 overflow-y-auto">
+            <aside className="absolute right-0 top-0 w-[400px] h-full bg-white shadow-lg p-4 overflow-y-auto z-10 ">
               {(() => {
                 const m = mahallalar.find(x => x.id === activeMahallaId);
                 if (!m) return null;
@@ -292,7 +397,9 @@ const UzbekistanMap = () => {
                     <h2 className="text-xl font-bold mb-4">{m.properties?.name}</h2>
                     {Object.entries(editableNarxlar[m.id] || {}).map(([key, value]) => (
                       <div key={key} className="mb-2">
-                        <label className="block text-sm font-medium mb-1">{key.replace('narx_', '').replace(/_/g, ' ')}</label>
+                        <label className="block text-sm font-medium mb-1">
+                          {key.replace('narx_', '').replace(/_/g, ' ')}
+                        </label>
                         <input
                           type="number"
                           className="w-full border px-2 py-1 rounded"
@@ -312,10 +419,10 @@ const UzbekistanMap = () => {
               })()}
             </aside>
           )}
-        </main>
-      </div>
+        </section>
+      </main>
     </div>
-  );
+  );``
 };
 
 export default UzbekistanMap;
