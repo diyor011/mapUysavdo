@@ -642,6 +642,7 @@ const UzbekistanMap = () => {
             </aside>
           )}
         </section>
+        
       </main>
     </div>
   );
